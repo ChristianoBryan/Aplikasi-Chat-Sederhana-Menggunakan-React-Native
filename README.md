@@ -1,1 +1,1 @@
-Project dibuat menggunakan expo, dikarenakan terdapat banyak sekali masalah saat set up react native cli
+Project dibuat menggunakan expo, dikarenakan terdapat banyak sekali masalah saat set up react native cli, dan juga waktu yang mepet dengan deadline.
