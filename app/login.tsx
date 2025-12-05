@@ -1,65 +1,86 @@
 import { useRouter } from "expo-router";
-import React, { useState } from "react";
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { Button, Text, TextInput, View } from "react-native";
+import { checkUser, loginUser, logoutUser } from "../src/services/authService";
 
 export default function LoginScreen() {
-  const [name, setName] = useState<string>("");
   const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loggedIn, setLoggedIn] = useState(false);
 
-  const handleLogin = () => {
-    if (!name.trim()) return;
-    router.push({
-      pathname: "/chat",
-      params: { name }
-    });
+  useEffect(() => {
+      const verifyUser = async () => {
+        const isLoggedIn = await checkUser();
+        setLoggedIn(isLoggedIn);
+        if (isLoggedIn) {
+          router.replace("/chat");
+        }
+      };
+      verifyUser();
+    }, []);
+
+  const handleLogin = async () => {
+    const cleanEmail = email.trim();
+    console.log("Attempt login", cleanEmail, password);
+
+    if (!cleanEmail || !password) {
+      alert("Email dan password wajib diisi");
+      return;
+    }
+    if (!cleanEmail.includes("@")) {
+      alert("Email tidak valid");
+      return;
+    }
+
+    try {
+      console.log("Mencoba login:", cleanEmail, password);
+      const user = await loginUser(cleanEmail, password);
+      console.log("Login success:", user);
+      alert(`Login berhasil sebagai ${user.email}`);
+      setEmail("");
+      setPassword("");
+      router.replace("/chat");
+    } catch (e: unknown) {
+      console.log("Login error:", e);
+      const msg = e instanceof Error ? e.message : JSON.stringify(e);
+      alert(`Gagal login: ${msg}`);
+    }
   };
+  const handleLogout = async () => {
+    try {await logoutUser();
+      setLoggedIn(false);
+      alert("Logout berhasil");
+    } catch (e: unknown) {
+      console.log("Logout error:", e);
+      const msg = e instanceof Error ? e.message : JSON.stringify(e);
+      alert(`Gagal logout: ${msg}`);
+    }
+  }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Masukkan Nama Anda</Text>
+    <View style={{ padding: 20, maxWidth: 400, }}>
+      <Text style={{fontFamily: "Segoe UI", fontSize: 50, textAlign:"center", }}>Halaman Login</Text>
       <TextInput
-        style={styles.input}
-        placeholder="Nama kamu"
-        value={name}
-        onChangeText={setName}
+        placeholder="Email"
+        value={email}
+        onChangeText={setEmail}
+        autoCapitalize="none"
+        keyboardType="email-address"
+        style={{ marginBottom: 25, marginTop: 30, borderWidth: 2, padding: 5, color:"black", backgroundColor:"#c9ecf9ff", borderRadius: 5}}
       />
-      <TouchableOpacity style={styles.button} onPress={handleLogin}>
-        <Text style={styles.buttonText}>Masuk Chat</Text>
-      </TouchableOpacity>
+      <TextInput
+        placeholder="Password"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+        style={{ marginBottom: 25, borderWidth: 2, padding: 5, color:"black", backgroundColor:"#d1e8f1ff", borderRadius: 5}}
+      />
+      <View style={{ marginBottom: 10 }}>
+        <Button title="Login" onPress={handleLogin} />
+      </View>
+      <Button title="Logout" onPress={handleLogout} />
+      <Text style={{ marginTop: 10, color:"black" }}>{loggedIn ? "Anda telah login" : "Anda belum login!"}</Text>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: "center",
-    padding: 20,
-    backgroundColor: "#fff"
-  },
-  title: {
-    fontSize: 26,
-    textAlign: "center",
-    marginBottom: 20,
-    fontWeight: "bold"
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 20,
-    fontSize: 16
-  },
-  button: {
-    backgroundColor: "#007AFF",
-    padding: 15,
-    borderRadius: 8,
-    alignItems: "center"
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600"
-  }
-});

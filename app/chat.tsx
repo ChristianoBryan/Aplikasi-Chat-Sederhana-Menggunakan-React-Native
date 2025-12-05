@@ -1,5 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import {
   addDoc,
   collection,
@@ -11,6 +11,7 @@ import {
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import React, { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -21,23 +22,52 @@ import {
   TouchableOpacity,
   View
 } from "react-native";
-import { db, storage } from "../firebase/firebaseconfig"; // adjust import if needed
+import { db, storage } from "../firebase/firebaseconfig";
+import { getUser, logoutUser } from "../src/services/authService";
 
 type MessageType = {
   id: string;
-  text: string;
+  text?: string;
   imageUrl?: string;
   user: string;
   createdAt: { seconds: number; nanoseconds: number } | null;
 };
 
 export default function ChatScreen() {
-  const { name } = useLocalSearchParams<{ name: string }>();
+  const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<string>("");
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string>("");
   const [messages, setMessages] = useState<MessageType[]>([]);
   const flatListRef = useRef<FlatList>(null);
 
-  // Real-time listener for messages
+  useEffect(() => {
+    loadCurrentUser();
+  }, []);
+
+  const loadCurrentUser = async () => {
+    try {
+      const user = await getUser();
+      console.log("Loaded user:", user);
+      
+      if (user && user.email) {
+        const displayName = user.email.split('@')[0];
+        console.log("Display name:", displayName);
+        setCurrentUser(displayName);
+      } else {
+        console.error("No user found");
+        alert("Tidak ada user login. Silakan login ulang.");
+        router.replace("/login");
+      }
+    } catch (error) {
+      console.error("Error loading user:", error);
+      alert("Error loading user data");
+      router.replace("/login");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     const messagesCollectionRef = collection(db, "messages");
     const q = query(messagesCollectionRef, orderBy("createdAt", "asc"));
@@ -51,7 +81,6 @@ export default function ChatScreen() {
       });
       setMessages(list);
 
-      // Auto-scroll to bottom when new messages arrive
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
@@ -60,97 +89,147 @@ export default function ChatScreen() {
     return () => unsubscribe();
   }, []);
 
-  // Send message function
+  // Send
   const sendMessage = async () => {
     if (!message.trim()) return;
+    
+    if (!currentUser) {
+      alert("Menunggu data user... Coba lagi");
+      return;
+    }
+
+    console.log("Sending message as:", currentUser);
 
     try {
       await addDoc(collection(db, "messages"), {
         text: message,
-        user: name,
+        user: currentUser,
         createdAt: serverTimestamp(),
       });
       setMessage("");
     } catch (error) {
-      console.error("Error sending message: ", error);
-    }
+        console.error("Error sending message:", error);
+        const errorMessage = error instanceof Error ? error.message : "Terjadi kesalahan";
+        alert("Gagal mengirim pesan: " + errorMessage);
+      }
   };
 
   const sendImage = async () => {
+    if (!currentUser) {
+      alert("Menunggu data user...");
+      return;
+    }
+
     try {
-    // Request permission to access media library
-    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    
-    if (permissionResult.granted === false) {
-      alert("Izin akses galeri diperlukan!");
-      return;
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (permissionResult.granted === false) {
+        alert("Izin akses galeri diperlukan!");
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.7,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const imageUri = result.assets[0].uri;
+      const response = await fetch(imageUri);
+      const blob = await response.blob();
+
+      const filename = `chat-images/${Date.now()}-${currentUser}.jpg`;
+      const storageRef = ref(storage, filename);
+
+      await uploadBytes(storageRef, blob);
+      const downloadURL = await getDownloadURL(storageRef);
+
+      await addDoc(collection(db, "messages"), {
+        imageUrl: downloadURL,
+        user: currentUser,
+        createdAt: serverTimestamp(),
+      });
+
+      console.log("Image sent successfully!");
+    } catch (error) {
+      console.error("Error sending image:", error);
+      alert("Gagal mengirim gambar. Coba lagi.");
     }
+  };
 
-    // Pick an image
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'], // Updated: use array instead of MediaTypeOptions
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.7, // Compress to reduce upload size
-    });
+  const renderItem = ({ item }: { item: MessageType }) => (
+    <View
+      style={[
+        styles.msgBox,
+        item.user === currentUser ? styles.myMsg : styles.otherMsg,
+      ]}
+    >
+      <Text style={styles.sender}>{item.user}</Text>
+      
+      {item.imageUrl ? (
+        <Image 
+          source={{ uri: item.imageUrl }} 
+          style={styles.messageImage}
+          resizeMode="cover"
+        />
+      ) : (
+        <Text style={styles.msgText}>{item.text}</Text>
+      )}
+    </View>
+  );
 
-    if (result.canceled) {
-      return;
-    }
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#007AFF" />
+        <Text style={styles.loadingText}>Memuat...</Text>
+      </View>
+    );
+  }
 
-    const imageUri = result.assets[0].uri;
-    
-    // Convert image to blob
-    const response = await fetch(imageUri);
-    const blob = await response.blob();
-
-    // Create unique filename
-    const filename = `chat-images/${Date.now()}-${name}.jpg`;
-    const storageRef = ref(storage, filename);
-
-    // Upload to Firebase Storage
-    await uploadBytes(storageRef, blob);
-
-    // Get download URL
-    const downloadURL = await getDownloadURL(storageRef);
-
-    // Save message with image URL to Firestore
-    await addDoc(collection(db, "messages"), {
-      imageUrl: downloadURL,
-      user: name,
-      createdAt: serverTimestamp(),
-    });
-
-    console.log("Image sent successfully!");
+  if (!currentUser) {
+    return (
+      <View style={styles.errorContainer}>
+        <Text style={styles.errorText}>Tidak ada user login</Text>
+        <TouchableOpacity 
+          style={styles.errorButton}
+          onPress={() => router.replace('/login')}
+        >
+          <Text style={styles.errorButtonText}>Kembali ke Login</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+  const handleLogout = async () => {
+  try {
+    await logoutUser();
+    router.replace("/login");
   } catch (error) {
-    console.error("Error sending image:", error);
-    alert("Gagal mengirim gambar. Coba lagi.");
+    console.error("Error logging out:", error);
+    alert("Gagal logout");
   }
 };
-
-  // Render each message
-const renderItem = ({ item }: { item: MessageType }) => (
-  <View
-    style={[
-      styles.msgBox,
-      item.user === name ? styles.myMsg : styles.otherMsg,
-    ]}
-  >
-    <Text style={styles.sender}>{item.user}</Text>
-    
-    {item.imageUrl ? (
-      <Image 
-        source={{ uri: item.imageUrl }} 
-        style={styles.messageImage}
-        resizeMode="cover"
-      />
-    ) : (
-      <Text style={styles.msgText}>{item.text}</Text>
-    )}
-  </View>
-);
-
   return (
+    <>
+    <Stack.Screen 
+      options={{ 
+        headerRight: () => (
+          <TouchableOpacity 
+            onPress={handleLogout}
+            style={{ marginRight: 15 }}
+          >
+            <Text style={{ color: '#007AFF', fontSize: 16, fontWeight: '600' }}>
+              Logout
+            </Text>
+          </TouchableOpacity>
+        ),
+      }} 
+    />
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -179,6 +258,7 @@ const renderItem = ({ item }: { item: MessageType }) => (
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
+    </>
   );
 }
 
@@ -186,6 +266,39 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#fff",
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#666',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#fff',
+  },
+  errorText: {
+    fontSize: 18,
+    marginBottom: 20,
+    color: '#333',
+  },
+  errorButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 10,
+  },
+  errorButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
   messageList: {
     padding: 10,
@@ -213,7 +326,7 @@ const styles = StyleSheet.create({
   msgText: {
     fontSize: 16,
   },
-  messageImage: {  // ← ADD THIS
+  messageImage: {
     width: 200,
     height: 200,
     borderRadius: 8,
@@ -244,11 +357,11 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   sendImageButton: {
-    backgroundColor: "#c68235ff",
+    backgroundColor: "#0e71f2ff",
     paddingVertical: 12,
     paddingHorizontal: 20,
     borderRadius: 20,
-    marginRight : 5
+    marginRight: 5
   },
   sendButtonText: {
     color: "#fff",
